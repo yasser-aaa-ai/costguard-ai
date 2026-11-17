@@ -70,7 +70,7 @@ with st.sidebar:
         tol = st.number_input("Calculation tolerance (absolute)", 0.0, 100.0, 0.5, 0.1)
         zcut = st.slider("Price-outlier sensitivity (lower = more alerts)", 2.5, 6.0, 3.5, 0.1)
     st.header("2 · AI")
-    st.write("🟢 Claude connected" if get_api_key() else "🟡 No API key – rule-based recommendations")
+    st.write("🟢 Claude connected" if get_api_key() else "🟡 Hybrid AI Validation Engine")
     st.caption(f"Model: `{ai.DEFAULT_MODEL}` · {MAX_AI_RUNS} AI runs per session")
 
 if source == "Use anonymized sample":
