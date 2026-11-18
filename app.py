@@ -1,5 +1,5 @@
 """CostGuard AI – BOQ QA Copilot + Submittal Register Generator (Streamlit)."""
-from __future__ import annotations
+from _future_ import annotations
 
 import hashlib
 import os
@@ -10,7 +10,7 @@ import streamlit as st
 
 from core import ai, checks, parser, report, submittals
 
-APP_DIR = Path(__file__).parent
+APP_DIR = Path(_file_).parent
 SAMPLE = APP_DIR / "data" / "sample_boq_anonymized.xlsx"
 MAX_AI_RUNS = 5          # per browser session – protects the API budget on a public link
 
@@ -90,7 +90,7 @@ with st.sidebar:
         zcut = st.slider("Price-outlier sensitivity (lower = more alerts)", 2.5, 6.0, 3.5, 0.1)
     st.header("2 · AI")
     st.write("🟢 Claude connected" if get_api_key() else "🟡 Hybrid AI Validation Engine")
-    st.caption(f"Model: `{ai.DEFAULT_MODEL}` · {MAX_AI_RUNS} AI runs per session")
+    st.caption(f"Model: {ai.DEFAULT_MODEL} · {MAX_AI_RUNS} AI runs per session")
 
 if source == "Use anonymized sample":
     data, fname = load_sample_bytes()
@@ -157,7 +157,7 @@ with tab1:
         gap = recon.loc[recon["Stated − recomputed"].abs() > tol]
         if len(gap):
             for _, r in gap.iterrows():
-                st.warning(f"**{r['Sheet']}**: the stated total is {r['Stated − recomputed']:,.2f} higher than "
+                st.warning(f"*{r['Sheet']}*: the stated total is {r['Stated − recomputed']:,.2f} higher than "
                            f"quantity × rate gives ({r['Stated − recomputed'] / r['Recomputed (qty × rate)']:.1%}).")
         else:
             st.success("Every sheet's stated total equals quantity × rate.")
@@ -176,9 +176,9 @@ with tab1:
 
     b1, b2 = st.columns([1.4, 3])
     if b1.button("✨ Generate AI explanations & recommendations", type="primary"):
+        top_msg = fdf.sort_values("amount", key=lambda s: s.abs(), ascending=False).iloc["message"] if len(fdf) else ""
         stats = dict(total=len(fdf), sheets=int((recon["Lines"] > 0).sum()), high=n_high, medium=n_med, low=n_low,
-                     top=(fdf.sort_values("amount", key=lambda s: s.abs(), ascending=False).iloc[0]["message"] if len(fdf) else ""),
-                     reconciliation=recon.to_dict("records"))
+                     top=top_msg, reconciliation=recon.to_dict("records"))
         payload = [clean(r) for r in fdf[["id", "severity", "check", "sheet", "row", "item", "message", "evidence", "amount"]].to_dict("records")]
         key, err = get_api_key(), None
         if key and st.session_state["ai_runs"] < MAX_AI_RUNS:
@@ -198,8 +198,60 @@ with tab1:
 
     if len(view):
         st.subheader("Inspect a finding")
-        pick = st.selectbox("Finding", view["id"].tolist(),
-                            format_func=lambda i: f"{i} · {view.set_index('id').loc[i, 'check']} · "
+        view_indexed = view.set_index("id")
+        pick = st.selectbox(
+            "Finding",
+            view["id"].tolist(),
+Use code with caution.
+format_func=lambda i: f"{i} · {view_indexed.loc[i, 'check']} · {view_indexed.loc[i, 'message'][:70]}"
+)
+r = fdf.set_index("id").loc[pick]
+st.markdown(f'<span class="pill {r["severity"]}">{r["severity"]} '
+f'{r["check"]} · sheet “{r["sheet"]}” · Excel row {"" if pd.isna(r["row"]) else int(r["row"])}'
+f'
+
+{r["message"]}
+Evidence: {r["evidence"] or "—"}',
+unsafe_allow_html=True)
+if r["recommendation_en"]:
+st.markdown(f"Why it matters: {r['explanation']}")
+st.markdown(f"Recommendation: {r['recommendation_en']}")
+st.markdown(f"التوصية: {r['recommendation_ar']}", unsafe_allow_html=True)
+st.caption(f"Source: {r['rec_source']}")
+else:
+st.caption("Click “Generate AI explanations & recommendations” to add a cause and a fix.")
+with st.expander("Clean BOQ (what the parser understood)"):
+st.dataframe(parsed.lines, hide_index=True, width="stretch")
+fallback_sum = ai.fallback_enrich([], dict(total=len(fdf), sheets=int((recon["Lines"] > 0).sum()),
+high=n_high, medium=n_med, low=n_low, top=""))
+summary_txt = (ai_res or {}).get("summary") or fallback_sum
+xlsx = cached_qa_report(fname, {"Lines analysed": len(parsed.lines), "Detached rows re-linked": parsed.realigned_count,
+"Findings (High / Medium / Low)": f"{n_high} / {n_med} / {n_low}",
+"Value at stake (indicative)": at_stake},
+recon, fdf, parsed.lines, summary_txt, register)
+st.download_button("⬇️ Download QA report (Excel)", xlsx, "CostGuard_BOQ_QA_Report.xlsx",
+"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+============================================================================= TAB 2
+
+with tab2:
+st.markdown("Extracts submittal requirements (sample approval, “or equal” alternatives, named manufacturers, "
+"shop drawings, colour/finish, standards) from the BOQ descriptions and builds a register ready to track.")
+if register.empty:
+st.info("No submittal requirements were found in the descriptions of this file.")
+else:
+m1, m2, m3, m4 = st.columns(4)
+m1.metric("Items requiring submittals", len(register))
+m2.metric("High priority", int((register["Priority"] == "High").sum()))
+m3.metric("Named brands", int((register["Brand / Manufacturer"] != "").sum()))
+m4.metric("Share of BOQ lines", f"{len(register) / len(parsed.lines):.0%}")
+tc = submittals.type_counts(register)
+st.bar_chart(tc, horizontal=True, height=220)
+pr = st.multiselect("Priority", ["High", "Medium", "Normal"], default=["High", "Medium", "Normal"])
+st.dataframe(register[register["Priority"].isin(pr)], hide_index=True, width="stretch")
+st.caption("Priority = number of different submittal requirements found in one item (3+ High, 2 Medium, 1 Normal). "
+"It is a transparent rule, not a risk score.")
+t1, t2 = st.columns([1.4, 3])
 if t1.button("✨ Add AI notes (what exactly to submit)"):
 key = get_api_key()
 if key and st.session_state["ai_runs"] < MAX_AI_RUNS:
@@ -220,8 +272,3 @@ st.download_button("⬇️ Download Submittal Register (Excel)", cached_register
 st.divider()
 st.caption("CostGuard AI · prototype for the AAA Cost Code AI Challenge 2026 · sample data only · "
 "findings are review aids – a qualified person must confirm each one.")
-
-
-st.divider()
-st.caption("CostGuard AI · prototype for the AAA Cost Code AI Challenge 2026 · sample data only · "
-           "findings are review aids – a qualified person must confirm each one.")
