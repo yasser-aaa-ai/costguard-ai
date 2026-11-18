@@ -202,7 +202,7 @@ with tab1:
         pick = st.selectbox(
             "Finding",
             view["id"].tolist(),
-Use code with caution.
+
 format_func=lambda i: f"{i} · {view_indexed.loc[i, 'check']} · {view_indexed.loc[i, 'message'][:70]}"
 )
 r = fdf.set_index("id").loc[pick]
