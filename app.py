@@ -176,9 +176,9 @@ with tab1:
 
     b1, b2 = st.columns([1.4, 3])
     if b1.button("✨ Generate AI explanations & recommendations", type="primary"):
-        top_msg = fdf.sort_values("amount", key=lambda s: s.abs(), ascending=False).iloc["message"] if len(fdf) else ""
         stats = dict(total=len(fdf), sheets=int((recon["Lines"] > 0).sum()), high=n_high, medium=n_med, low=n_low,
-                     top=top_msg, reconciliation=recon.to_dict("records"))
+                     top=(fdf.sort_values("amount", key=lambda s: s.abs(), ascending=False).iloc[0]["message"] if len(fdf) else ""),
+                     reconciliation=recon.to_dict("records"))
         payload = [clean(r) for r in fdf[["id", "severity", "check", "sheet", "row", "item", "message", "evidence", "amount"]].to_dict("records")]
         key, err = get_api_key(), None
         if key and st.session_state["ai_runs"] < MAX_AI_RUNS:
@@ -198,13 +198,10 @@ with tab1:
 
     if len(view):
         st.subheader("Inspect a finding")
-        view_indexed = view.set_index("id")
-        pick = st.selectbox(
-            "Finding",
-            view["id"].tolist(),
-
-format_func=lambda i: f"{i} · {view_indexed.loc[i, 'check']} · {view_indexed.loc[i, 'message'][:70]}"
-)
+        pick = st.selectbox("Finding", view["id"].tolist(),
+                            format_func=lambda i: f"{i} · {view.set_index('id').loc[i, 'check']} · "
+Use code with caution.
+f"{view.set_index('id').loc[i, 'message'][:70]}")
 r = fdf.set_index("id").loc[pick]
 st.markdown(f'<span class="pill {r["severity"]}">{r["severity"]} '
 f'{r["check"]} · sheet “{r["sheet"]}” · Excel row {"" if pd.isna(r["row"]) else int(r["row"])}'
@@ -222,18 +219,15 @@ else:
 st.caption("Click “Generate AI explanations & recommendations” to add a cause and a fix.")
 with st.expander("Clean BOQ (what the parser understood)"):
 st.dataframe(parsed.lines, hide_index=True, width="stretch")
-fallback_sum = ai.fallback_enrich([], dict(total=len(fdf), sheets=int((recon["Lines"] > 0).sum()),
-high=n_high, medium=n_med, low=n_low, top=""))
-summary_txt = (ai_res or {}).get("summary") or fallback_sum
+summary_txt = (ai_res or {}).get("summary") or ai.fallback_enrich([], dict(total=len(fdf), sheets=int((recon["Lines"] > 0).sum()),
+high=n_high, medium=n_med, low=n_low, top=""))[1]
 xlsx = cached_qa_report(fname, {"Lines analysed": len(parsed.lines), "Detached rows re-linked": parsed.realigned_count,
 "Findings (High / Medium / Low)": f"{n_high} / {n_med} / {n_low}",
 "Value at stake (indicative)": at_stake},
 recon, fdf, parsed.lines, summary_txt, register)
 st.download_button("⬇️ Download QA report (Excel)", xlsx, "CostGuard_BOQ_QA_Report.xlsx",
 "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
 ============================================================================= TAB 2
-
 with tab2:
 st.markdown("Extracts submittal requirements (sample approval, “or equal” alternatives, named manufacturers, "
 "shop drawings, colour/finish, standards) from the BOQ descriptions and builds a register ready to track.")
