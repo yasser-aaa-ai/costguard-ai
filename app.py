@@ -1,5 +1,5 @@
 """CostGuard AI – BOQ QA Copilot + Submittal Register Generator (Streamlit)."""
-from _future_ import annotations
+from __future__ import annotations
 
 import hashlib
 import os
@@ -10,7 +10,7 @@ import streamlit as st
 
 from core import ai, checks, parser, report, submittals
 
-APP_DIR = Path(_file_).parent
+APP_DIR = Path(__file__).parent
 SAMPLE = APP_DIR / "data" / "sample_boq_anonymized.xlsx"
 MAX_AI_RUNS = 5          # per browser session – protects the API budget on a public link
 
@@ -44,29 +44,10 @@ def get_api_key() -> str | None:
     return key or os.getenv("ANTHROPIC_API_KEY")
 
 
-@st.cache_data(show_spinner=False)
-def load_sample_bytes() -> tuple[bytes, str]:
-    return SAMPLE.read_bytes(), SAMPLE.name
-
-
 @st.cache_data(show_spinner="Reading the file and re-linking detached rows…")
 def analyse(data: bytes, name: str, tol: float, z: float):
     parsed = parser.parse_workbook(parser.read_workbook(data, name))
-    found = checks.run_checks(parsed, tol, z)
-    fdf = checks.findings_frame(found)
-    recon = checks.reconciliation(parsed)
-    reg = submittals.extract(parsed.lines)
-    return parsed, fdf, recon, reg
-
-
-@st.cache_data(show_spinner=False)
-def cached_qa_report(fname, metrics, recon, fdf, lines, summary_txt, register):
-    return report.build_report(fname, metrics, recon, fdf, lines, summary_txt, register)
-
-
-@st.cache_data(show_spinner=False)
-def cached_register_report(register):
-    return report.build_register_workbook(register)
+    return parsed, checks.run_checks(parsed, tol, z)
 
 
 def clean(record: dict) -> dict:
@@ -90,10 +71,10 @@ with st.sidebar:
         zcut = st.slider("Price-outlier sensitivity (lower = more alerts)", 2.5, 6.0, 3.5, 0.1)
     st.header("2 · AI")
     st.write("🟢 Claude connected" if get_api_key() else "🟡 Hybrid AI Validation Engine")
-    st.caption(f"Model: {ai.DEFAULT_MODEL} · {MAX_AI_RUNS} AI runs per session")
+    st.caption(f"Model: `{ai.DEFAULT_MODEL}` · {MAX_AI_RUNS} AI runs per session")
 
 if source == "Use anonymized sample":
-    data, fname = load_sample_bytes()
+    data, fname = SAMPLE.read_bytes(), SAMPLE.name
 else:
     if upload is None:
         st.info("Upload a BOQ file in the sidebar, or switch to the anonymized sample.")
@@ -101,7 +82,7 @@ else:
     data, fname = upload.getvalue(), upload.name
 
 try:
-    parsed, base_fdf, recon, base_register = analyse(data, fname, float(tol), float(zcut))
+    parsed, found = analyse(data, fname, float(tol), float(zcut))
 except Exception as exc:
     st.error(f"Could not read this file: {exc}")
     st.stop()
@@ -118,7 +99,8 @@ st.session_state.setdefault("ai", {})
 st.session_state.setdefault("sub_notes", {})
 st.session_state.setdefault("ai_runs", 0)
 
-fdf = base_fdf.copy()
+fdf = checks.findings_frame(found)
+recon = checks.reconciliation(parsed)
 ai_res = st.session_state["ai"].get(run_key)
 for col in ("explanation", "recommendation_en", "recommendation_ar", "rec_source"):
     fdf[col] = ""
@@ -131,8 +113,7 @@ if ai_res:
 
 n_high, n_med, n_low = (int((fdf["severity"] == s).sum()) for s in ("High", "Medium", "Low"))
 at_stake = float(fdf.loc[fdf["severity"].isin(["High", "Medium"]), "amount"].abs().sum())
-
-register = base_register.copy()
+register = submittals.extract(parsed.lines)
 notes = st.session_state["sub_notes"].get(run_key, {})
 if notes and not register.empty:
     register["AI Note"] = register["Submittal No"].map(notes).fillna("")
@@ -157,7 +138,7 @@ with tab1:
         gap = recon.loc[recon["Stated − recomputed"].abs() > tol]
         if len(gap):
             for _, r in gap.iterrows():
-                st.warning(f"*{r['Sheet']}*: the stated total is {r['Stated − recomputed']:,.2f} higher than "
+                st.warning(f"**{r['Sheet']}**: the stated total is {r['Stated − recomputed']:,.2f} higher than "
                            f"quantity × rate gives ({r['Stated − recomputed'] / r['Recomputed (qty × rate)']:.1%}).")
         else:
             st.success("Every sheet's stated total equals quantity × rate.")
@@ -200,69 +181,69 @@ with tab1:
         st.subheader("Inspect a finding")
         pick = st.selectbox("Finding", view["id"].tolist(),
                             format_func=lambda i: f"{i} · {view.set_index('id').loc[i, 'check']} · "
-Use code with caution.
-f"{view.set_index('id').loc[i, 'message'][:70]}")
-r = fdf.set_index("id").loc[pick]
-st.markdown(f'<span class="pill {r["severity"]}">{r["severity"]} '
-f'{r["check"]} · sheet “{r["sheet"]}” · Excel row {"" if pd.isna(r["row"]) else int(r["row"])}'
-f'
+                                                  f"{view.set_index('id').loc[i, 'message'][:70]}")
+        r = fdf.set_index("id").loc[pick]
+        st.markdown(f'<div class="card"><span class="pill {r["severity"]}">{r["severity"]}</span> '
+                    f'<b>{r["check"]}</b> · sheet “{r["sheet"]}” · Excel row {"" if pd.isna(r["row"]) else int(r["row"])}'
+                    f'<br><br>{r["message"]}<br><span class="src">Evidence: {r["evidence"] or "—"}</span></div>',
+                    unsafe_allow_html=True)
+        if r["recommendation_en"]:
+            st.markdown(f"**Why it matters:** {r['explanation']}")
+            st.markdown(f"**Recommendation:** {r['recommendation_en']}")
+            st.markdown(f"<div dir='rtl' style='text-align:right'><b>التوصية:</b> {r['recommendation_ar']}</div>", unsafe_allow_html=True)
+            st.caption(f"Source: {r['rec_source']}")
+        else:
+            st.caption("Click “Generate AI explanations & recommendations” to add a cause and a fix.")
 
-{r["message"]}
-Evidence: {r["evidence"] or "—"}',
-unsafe_allow_html=True)
-if r["recommendation_en"]:
-st.markdown(f"Why it matters: {r['explanation']}")
-st.markdown(f"Recommendation: {r['recommendation_en']}")
-st.markdown(f"التوصية: {r['recommendation_ar']}", unsafe_allow_html=True)
-st.caption(f"Source: {r['rec_source']}")
-else:
-st.caption("Click “Generate AI explanations & recommendations” to add a cause and a fix.")
-with st.expander("Clean BOQ (what the parser understood)"):
-st.dataframe(parsed.lines, hide_index=True, width="stretch")
-summary_txt = (ai_res or {}).get("summary") or ai.fallback_enrich([], dict(total=len(fdf), sheets=int((recon["Lines"] > 0).sum()),
-high=n_high, medium=n_med, low=n_low, top=""))[1]
-xlsx = cached_qa_report(fname, {"Lines analysed": len(parsed.lines), "Detached rows re-linked": parsed.realigned_count,
-"Findings (High / Medium / Low)": f"{n_high} / {n_med} / {n_low}",
-"Value at stake (indicative)": at_stake},
-recon, fdf, parsed.lines, summary_txt, register)
-st.download_button("⬇️ Download QA report (Excel)", xlsx, "CostGuard_BOQ_QA_Report.xlsx",
-"application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-============================================================================= TAB 2
+    with st.expander("Clean BOQ (what the parser understood)"):
+        st.dataframe(parsed.lines, hide_index=True, width="stretch")
+
+    summary_txt = (ai_res or {}).get("summary") or ai.fallback_enrich([], dict(total=len(fdf), sheets=int((recon["Lines"] > 0).sum()),
+                                                                              high=n_high, medium=n_med, low=n_low, top=""))[1]
+    xlsx = report.build_report(fname, {"Lines analysed": len(parsed.lines), "Detached rows re-linked": parsed.realigned_count,
+                                      "Findings (High / Medium / Low)": f"{n_high} / {n_med} / {n_low}",
+                                      "Value at stake (indicative)": at_stake},
+                               recon, fdf, parsed.lines, summary_txt, register)
+    st.download_button("⬇️ Download QA report (Excel)", xlsx, "CostGuard_BOQ_QA_Report.xlsx",
+                       "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+# ============================================================================= TAB 2
 with tab2:
-st.markdown("Extracts submittal requirements (sample approval, “or equal” alternatives, named manufacturers, "
-"shop drawings, colour/finish, standards) from the BOQ descriptions and builds a register ready to track.")
-if register.empty:
-st.info("No submittal requirements were found in the descriptions of this file.")
-else:
-m1, m2, m3, m4 = st.columns(4)
-m1.metric("Items requiring submittals", len(register))
-m2.metric("High priority", int((register["Priority"] == "High").sum()))
-m3.metric("Named brands", int((register["Brand / Manufacturer"] != "").sum()))
-m4.metric("Share of BOQ lines", f"{len(register) / len(parsed.lines):.0%}")
-tc = submittals.type_counts(register)
-st.bar_chart(tc, horizontal=True, height=220)
-pr = st.multiselect("Priority", ["High", "Medium", "Normal"], default=["High", "Medium", "Normal"])
-st.dataframe(register[register["Priority"].isin(pr)], hide_index=True, width="stretch")
-st.caption("Priority = number of different submittal requirements found in one item (3+ High, 2 Medium, 1 Normal). "
-"It is a transparent rule, not a risk score.")
-t1, t2 = st.columns([1.4, 3])
-if t1.button("✨ Add AI notes (what exactly to submit)"):
-key = get_api_key()
-if key and st.session_state["ai_runs"] < MAX_AI_RUNS:
-rows = [{"no": r["Submittal No"], "description": r["Description"], "types": r["Submittal Types"]}
-for _, r in register.iterrows()]
-with st.spinner("Claude is reading the requirements…"):
-out, err = ai.enrich_submittals(rows, key)
-st.session_state["ai_runs"] += 1
-if err:
-t2.warning(f"AI notes unavailable: {err[:160]}")
-else:
-st.session_state["sub_notes"][run_key] = out
-st.rerun()
-else:
-t2.warning("AI notes need an API key (or the session limit was reached). The register works without them.")
-st.download_button("⬇️ Download Submittal Register (Excel)", cached_register_report(register),
-"Submittal_Register.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    st.markdown("Extracts submittal requirements (sample approval, “or equal” alternatives, named manufacturers, "
+                "shop drawings, colour/finish, standards) from the BOQ descriptions and builds a register ready to track.")
+    if register.empty:
+        st.info("No submittal requirements were found in the descriptions of this file.")
+    else:
+        m1, m2, m3, m4 = st.columns(4)
+        m1.metric("Items requiring submittals", len(register))
+        m2.metric("High priority", int((register["Priority"] == "High").sum()))
+        m3.metric("Named brands", int((register["Brand / Manufacturer"] != "").sum()))
+        m4.metric("Share of BOQ lines", f"{len(register) / len(parsed.lines):.0%}")
+        tc = submittals.type_counts(register)
+        st.bar_chart(tc, horizontal=True, height=220)
+        pr = st.multiselect("Priority", ["High", "Medium", "Normal"], default=["High", "Medium", "Normal"])
+        st.dataframe(register[register["Priority"].isin(pr)], hide_index=True, width="stretch")
+        st.caption("Priority = number of different submittal requirements found in one item (3+ High, 2 Medium, 1 Normal). "
+                   "It is a transparent rule, not a risk score.")
+        t1, t2 = st.columns([1.4, 3])
+        if t1.button("✨ Add AI notes (what exactly to submit)"):
+            key = get_api_key()
+            if key and st.session_state["ai_runs"] < MAX_AI_RUNS:
+                rows = [{"no": r["Submittal No"], "description": r["Description"], "types": r["Submittal Types"]}
+                        for _, r in register.iterrows()]
+                with st.spinner("Claude is reading the requirements…"):
+                    out, err = ai.enrich_submittals(rows, key)
+                st.session_state["ai_runs"] += 1
+                if err:
+                    t2.warning(f"AI notes unavailable: {err[:160]}")
+                else:
+                    st.session_state["sub_notes"][run_key] = out
+                    st.rerun()
+            else:
+                t2.warning("AI notes need an API key (or the session limit was reached). The register works without them.")
+        st.download_button("⬇️ Download Submittal Register (Excel)", report.build_register_workbook(register),
+                           "Submittal_Register.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
 st.divider()
 st.caption("CostGuard AI · prototype for the AAA Cost Code AI Challenge 2026 · sample data only · "
-"findings are review aids – a qualified person must confirm each one.")
+           "findings are review aids – a qualified person must confirm each one.")
